@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon-192x192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#00C853" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>LoanDash | Personal Finance Tracker</title>
+  <script type="module" crossorigin src="/assets/index-D1fWueUi.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CXEj8lff.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // One-time cleanup: unregister any old service workers from previous installs
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+          for (var i = 0; i < registrations.length; i++) {
+            registrations[i].unregister();
+          }
+        });
+      }
+      // Apply theme before render to prevent flash
+      (function() {
+        var theme = localStorage.getItem('theme');
+        var isDark;
+        if (theme === 'system' || !theme) {
+          isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        } else {
+          isDark = theme === 'dark';
+        }
+        if (!isDark) {
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
+  </body>
+</html>

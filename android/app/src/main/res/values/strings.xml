@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LoanDash</string>
+    <string name="title_activity_main">LoanDash</string>
+    <string name="package_name">com.loandash.app</string>
+    <string name="custom_url_scheme">com.loandash.app</string>
+</resources>
