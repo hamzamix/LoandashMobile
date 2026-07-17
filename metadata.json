@@ -1,0 +1,6 @@
+{
+  "name": "LoanDash",
+  "description": "A minimalist, premium mobile-first application to track loans, debts, bills, and subscriptions, complete with payment histories, auto-payment rules, and smart progress logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

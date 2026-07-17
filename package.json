@@ -1,0 +1,42 @@
+{
+  "name": "loandash",
+  "version": "1.0.0",
+  "description": "Mobile-first personal finance tracker for debts, loans, bills, and subscriptions.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "server": "node server.js",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "android:add": "cap add android",
+    "android:sync": "cap sync android",
+    "android:open": "cap open android"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/local-notifications": "^7.0.7",
+    "@capacitor/status-bar": "^7.0.6",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "recharts": "^3.9.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.20",
+    "esbuild": "^0.23.0",
+    "eslint": "^10.2.1",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19"
+  }
+}
