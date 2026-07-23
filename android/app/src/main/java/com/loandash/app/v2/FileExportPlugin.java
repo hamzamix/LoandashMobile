@@ -15,6 +15,8 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import android.util.Base64;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -27,6 +29,7 @@ public class FileExportPlugin extends Plugin {
     public void exportJson(PluginCall call) {
         String data = call.getString("data");
         String filename = call.getString("filename", "backup.json");
+        String encoding = call.getString("encoding", "utf8");
 
         if (data == null || data.isEmpty()) {
             call.reject("No data to export");
@@ -34,12 +37,17 @@ public class FileExportPlugin extends Plugin {
         }
 
         try {
-            byte[] bytes = data.getBytes("UTF-8");
+            byte[] bytes;
+            if ("base64".equals(encoding)) {
+                bytes = Base64.decode(data, Base64.NO_WRAP);
+            } else {
+                bytes = data.getBytes("UTF-8");
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.Downloads.DISPLAY_NAME, filename);
-                values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+                values.put(MediaStore.Downloads.MIME_TYPE, filename.endsWith(".apk") ? "application/vnd.android.package-archive" : "application/json");
                 values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                 values.put(MediaStore.Downloads.IS_PENDING, 1);
 
