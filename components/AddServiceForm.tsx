@@ -15,6 +15,8 @@ export type ServiceFormData = {
     enableReminders: boolean;
     reminderDays: number | string;
     icon: string | null;
+    isRecurring?: boolean;
+    paymentMethodType?: 'manual' | 'auto';
 };
 
 interface AddServiceFormProps {
@@ -55,6 +57,7 @@ const AddServiceForm: React.FC<AddServiceFormProps> = ({ onSubmit, onCancel, ini
     const [description, setDescription] = useState('');
     const [enableReminders, setEnableReminders] = useState(true);
     const [remindMe, setRemindMe] = useState<number | string>(3);
+    const [paymentMethodType, setPaymentMethodType] = useState<'manual' | 'auto'>(initialData?.paymentMethodType || 'manual');
 
     const [iconSuggestions, setIconSuggestions] = useState<IconResult[]>([]);
     const debouncedServiceName = useDebounce(serviceName, 300);
@@ -76,6 +79,7 @@ const AddServiceForm: React.FC<AddServiceFormProps> = ({ onSubmit, onCancel, ini
             setDescription(initialData.description || '');
             setEnableReminders(initialData.enableReminders ?? true);
             setRemindMe(initialData.reminderDays ?? 3);
+            setPaymentMethodType(initialData.paymentMethodType || 'manual');
         }
     }, [initialData]);
 
@@ -136,6 +140,8 @@ const AddServiceForm: React.FC<AddServiceFormProps> = ({ onSubmit, onCancel, ini
                 enableReminders,
                 reminderDays: remindMe,
                 icon,
+                isRecurring: true,
+                paymentMethodType,
             });
         }
     };
@@ -243,6 +249,27 @@ const AddServiceForm: React.FC<AddServiceFormProps> = ({ onSubmit, onCancel, ini
             <div>
                 <label htmlFor="description" className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Description (Optional)</label>
                 <textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className={inputClass} placeholder="e.g., Premium subscription with family plan" />
+            </div>
+
+            {/* Payment Method */}
+            <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-2">Payment Method</label>
+                <div className="flex gap-3">
+                    <label className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all ${paymentMethodType === 'manual' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-[#1D2029]'}`}>
+                        <input type="radio" name="paymentMethod" value="manual" checked={paymentMethodType === 'manual'} onChange={() => setPaymentMethodType('manual')} className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-600 dark:bg-slate-800" />
+                        <div>
+                            <span className="text-sm font-semibold text-slate-700 dark:text-gray-200">Manual</span>
+                            <p className="text-xs text-slate-500 dark:text-gray-400">Record each payment yourself</p>
+                        </div>
+                    </label>
+                    <label className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all ${paymentMethodType === 'auto' ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-[#1D2029]'}`}>
+                        <input type="radio" name="paymentMethod" value="auto" checked={paymentMethodType === 'auto'} onChange={() => setPaymentMethodType('auto')} className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-600 dark:bg-slate-800" />
+                        <div>
+                            <span className="text-sm font-semibold text-slate-700 dark:text-gray-200">Auto</span>
+                            <p className="text-xs text-slate-500 dark:text-gray-400">Auto-record on due date</p>
+                        </div>
+                    </label>
+                </div>
             </div>
 
             {/* Buttons */}

@@ -5,7 +5,9 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { SUPPORTED_CURRENCIES } from '../utils/currency.ts';
 import { checkForUpdate, UpdateInfo, CURRENT_VERSION, GITHUB_REPO } from '../utils/versionCheck.ts';
+import { getApiBase, setApiBase, clearApiBase, apiCheckServer, apiExportData, apiImportData } from '../src/api/client.ts';
 import ProfileModal from './ProfileModal.tsx';
+import AlertModal from './AlertModal.tsx';
 
 interface SettingsViewProps {
     appCurrency: string;
@@ -15,20 +17,30 @@ interface SettingsViewProps {
     onToggleNotifications: (enabled: boolean) => void;
     theme: 'light' | 'dark';
     onSetTheme: (theme: 'system' | 'light' | 'dark') => void;
+    isNative?: boolean;
+    isCompanion?: boolean;
 }
 
 const SettingsView: React.FC<SettingsViewProps> = ({ 
     appCurrency, onUpdateAppCurrency, onRestoreFromData,
     notificationsEnabled, onToggleNotifications,
-    theme, onSetTheme
+    theme, onSetTheme, isNative = false, isCompanion = false
 }) => {
     const inputClass = "w-full bg-slate-50/50 dark:bg-[#1D2029]/50 border border-slate-200 dark:border-[#2F3441] rounded-xl px-3.5 py-2.5 md:px-4 md:py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all duration-200 outline-none";
-    const isNative = Capacitor.isNativePlatform();
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [updateDismissed, setUpdateDismissed] = useState(() => 
         localStorage.getItem('loanDashUpdateDismissed') === 'true'
     );
     const [profileOpen, setProfileOpen] = useState(false);
+    const [aboutExpanded, setAboutExpanded] = useState(false);
+    const [checkingUpdate, setCheckingUpdate] = useState(false);
+    const aboutRef = React.useRef<HTMLDivElement>(null);
+
+    // Server connection state
+    const [serverUrl, setServerUrl] = useState(getApiBase());
+    const [isConnected, setIsConnected] = useState(!!getApiBase());
+    const [connectionTesting, setConnectionTesting] = useState(false);
+    const [connectionError, setConnectionError] = useState('');
 
     // In-app update state
     const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'downloaded' | 'error'>('idle');
@@ -36,7 +48,30 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     const [apkUri, setApkUri] = useState<string | null>(null);
     const [apkUrl, setApkUrl] = useState<string | null>(null);
 
+    // Alert modal state
+    const [alertOpen, setAlertOpen] = useState(false);
+    const [alertTitle, setAlertTitle] = useState('');
+    const [alertMessage, setAlertMessage] = useState('');
+    const [alertVariant, setAlertVariant] = useState<'success' | 'error' | 'default'>('default');
+
+    const showAlert = (title: string, message: string, variant: 'success' | 'error' | 'default' = 'default') => {
+        setAlertTitle(title);
+        setAlertMessage(message);
+        setAlertVariant(variant);
+        setAlertOpen(true);
+    };
+
     useEffect(() => {
+        // Clear cached update info when app version changes
+        const storedVersion = localStorage.getItem('loanDashUpdateVersion');
+        if (storedVersion !== CURRENT_VERSION) {
+            localStorage.removeItem('loanDashUpdateInfo');
+            localStorage.removeItem('loanDashLastUpdateCheck');
+            localStorage.removeItem('loanDashUpdateDismissed');
+            localStorage.setItem('loanDashUpdateVersion', CURRENT_VERSION);
+            setUpdateDismissed(false);
+        }
+
         checkForUpdate().then(info => {
             if (info?.available) {
                 setUpdateInfo(info);
@@ -61,6 +96,29 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     const handleDismissUpdate = () => {
         setUpdateDismissed(true);
         localStorage.setItem('loanDashUpdateDismissed', 'true');
+    };
+
+    const handleConnectServer = async () => {
+        if (!serverUrl.trim()) return;
+        setConnectionTesting(true);
+        setConnectionError('');
+        const ok = await apiCheckServer(serverUrl);
+        if (ok) {
+            setApiBase(serverUrl);
+            setIsConnected(true);
+            setConnectionError('');
+        } else {
+            setConnectionError('Cannot reach server. Check the URL and try again.');
+        }
+        setConnectionTesting(false);
+    };
+
+    const handleDisconnectServer = () => {
+        clearApiBase();
+        setIsConnected(false);
+        setServerUrl('');
+        setConnectionError('');
+        window.location.reload();
     };
 
     const handleDownloadApk = async () => {
@@ -101,9 +159,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             const blob = new Blob(chunks, { type: 'application/vnd.android.package-archive' });
             const filename = `loandash_v${updateInfo?.latestVersion}.apk`;
 
+            const arrayBuffer = await blob.arrayBuffer();
+            const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
             const FileExport = registerPlugin<any>('FileExport');
-            const result = await FileExport.exportJson({ data: await blob.text(), filename });
-            setApkUri(result?.uri || null);
+            const result = await FileExport.exportJson({ data: base64, filename, encoding: 'base64' });
+            setApkUri(result?.path || null);
             setDownloadState('downloaded');
         } catch {
             setDownloadState('error');
@@ -145,14 +206,25 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
                                 {downloadState === 'idle' && (
                                     <div className="flex gap-2 mt-3">
-                                        <button
-                                            onClick={handleDownloadApk}
-                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-600 text-xs font-bold rounded-lg hover:bg-indigo-50 transition-colors"
-                                        >
-                                            <DownloadIcon className="w-3.5 h-3.5" />
-                                            {isNative && apkUrl ? 'Download Update' : 'Download'}
-                                            {!isNative && <ExternalLinkIcon className="w-3.5 h-3.5" />}
-                                        </button>
+                                        {isNative ? (
+                                            <button
+                                                onClick={handleDownloadApk}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-600 text-xs font-bold rounded-lg hover:bg-indigo-50 transition-colors"
+                                            >
+                                                <DownloadIcon className="w-3.5 h-3.5" />
+                                                {apkUrl ? 'Download Update' : 'Download'}
+                                            </button>
+                                        ) : (
+                                            <a
+                                                href={updateInfo.htmlUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-600 text-xs font-bold rounded-lg hover:bg-indigo-50 transition-colors"
+                                            >
+                                                View Release
+                                                <ExternalLinkIcon className="w-3.5 h-3.5" />
+                                            </a>
+                                        )}
                                         <button
                                             onClick={handleDismissUpdate}
                                             className="px-3 py-1.5 bg-white/20 text-white text-xs font-bold rounded-lg hover:bg-white/30 transition-colors"
@@ -251,13 +323,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
                 </div>
 
-                {/* Notifications */}
+                {/* Notifications - Only on native apps */}
+                {isNative && (
                 <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
                     <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white mb-2">Notifications</h2>
                     <p className="text-sm text-slate-500 dark:text-gray-400 mb-6">
-                        {isNative
-                            ? 'Get reminded about upcoming bills, due dates, and overdue payments.'
-                            : 'Notifications are only available on the Android app.'}
+                        Get reminded about upcoming bills, due dates, and overdue payments.
                     </p>
 
                     <div className="flex items-center justify-between">
@@ -285,6 +356,62 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         </button>
                     </div>
                 </div>
+                )}
+
+                {/* Server Connection - Only on companion app (native + server configured) */}
+                {isCompanion && (
+                <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
+                    <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white mb-2">Server Connection</h2>
+                    <p className="text-sm text-slate-500 dark:text-gray-400 mb-4">
+                        {isConnected
+                            ? 'Connected to your LoanDash server. Data syncs automatically.'
+                            : 'Connect to a LoanDash server to sync data across devices. Run the web app to get a server URL.'}
+                    </p>
+
+                    {isConnected ? (
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-xl bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+                                </div>
+                                <div>
+                                    <span className="text-sm font-semibold text-slate-900 dark:text-white">Connected</span>
+                                    <span className="text-xs text-slate-400 dark:text-gray-500 block truncate max-w-[200px]">{getApiBase()}</span>
+                                </div>
+                            </div>
+                            <button
+                                onClick={handleDisconnectServer}
+                                className="px-4 py-2 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-xs font-semibold rounded-lg hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
+                            >
+                                Disconnect
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-medium text-slate-600 dark:text-gray-300 mb-1.5">Server URL</label>
+                                <input
+                                    type="url"
+                                    value={serverUrl}
+                                    onChange={(e) => { setServerUrl(e.target.value); setConnectionError(''); }}
+                                    placeholder="http://localhost:3000"
+                                    className={inputClass}
+                                />
+                            </div>
+                            {connectionError && (
+                                <p className="text-xs text-red-600 dark:text-red-400">{connectionError}</p>
+                            )}
+                            <button
+                                onClick={handleConnectServer}
+                                disabled={!serverUrl.trim() || connectionTesting}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-400 text-white text-xs font-semibold rounded-lg transition-colors"
+                            >
+                                {connectionTesting ? 'Testing...' : 'Connect'}
+                            </button>
+                        </div>
+                    )}
+                </div>
+                )}
 
                 {/* Data Management */}
                 <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
@@ -294,25 +421,39 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="flex flex-wrap gap-4">
                         <button 
                             onClick={async () => {
-                                const data = localStorage.getItem('loanDashFinancialItems');
-                                if (!data) return alert('No data to export.');
-                                const jsonData = JSON.stringify({ financialItems: JSON.parse(data) }, null, 2);
-                                const filename = `loandash_backup_${new Date().toISOString().split('T')[0]}.json`;
-                                if (isNative) {
+                                if (isConnected) {
                                     try {
-                                        const FileExport = registerPlugin<any>('FileExport');
-                                        const result = await FileExport.exportJson({ data: jsonData, filename });
-                                        alert(`Backup saved to Downloads/${filename}`);
-                                    } catch {
-                                        alert('Export failed. Please try again.');
-                                    }
+                                        const data = await apiExportData();
+                                        const jsonData = JSON.stringify(data, null, 2);
+                                        const filename = `loandash_backup_${new Date().toISOString().split('T')[0]}.json`;
+                                        if (isNative) {
+                                            const FileExport = registerPlugin<any>('FileExport');
+                                            await FileExport.exportJson({ data: jsonData, filename });
+                                            showAlert('Export Complete', `Backup saved to Downloads/${filename}`, 'success');
+                                        } else {
+                                            const blob = new Blob([jsonData], { type: 'application/json' });
+                                            const url = URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = url; a.download = filename; a.click();
+                                        }
+                                    } catch { showAlert('Export Failed', 'Export failed. Please try again.', 'error'); }
                                 } else {
-                                    const blob = new Blob([jsonData], { type: 'application/json' });
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = filename;
-                                    a.click();
+                                    const data = localStorage.getItem('loanDashFinancialItems');
+                                    if (!data) return showAlert('No Data', 'No data to export.', 'error');
+                                    const jsonData = JSON.stringify({ financialItems: JSON.parse(data) }, null, 2);
+                                    const filename = `loandash_backup_${new Date().toISOString().split('T')[0]}.json`;
+                                    if (isNative) {
+                                        try {
+                                            const FileExport = registerPlugin<any>('FileExport');
+                                            await FileExport.exportJson({ data: jsonData, filename });
+                                            showAlert('Export Complete', `Backup saved to Downloads/${filename}`, 'success');
+                                        } catch { showAlert('Export Failed', 'Export failed. Please try again.', 'error'); }
+                                    } else {
+                                        const blob = new Blob([jsonData], { type: 'application/json' });
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url; a.download = filename; a.click();
+                                    }
                                 }
                             }}
                             className="flex items-center gap-2 px-4 md:px-6 py-2.5 md:py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
@@ -332,17 +473,20 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                     const file = e.target.files?.[0];
                                     if (file) {
                                         const reader = new FileReader();
-                                        reader.onload = (event) => {
+                                        reader.onload = async (event) => {
                                             try {
                                                 const json = JSON.parse(event.target?.result as string);
                                                 if (json && json.financialItems) {
+                                                    if (isConnected) {
+                                                        await apiImportData(json);
+                                                    }
                                                     onRestoreFromData(json);
-                                                    alert('Data imported successfully!');
+                                                    showAlert('Import Complete', 'Data imported successfully!', 'success');
                                                 } else {
-                                                    alert('Invalid backup file format.');
+                                                    showAlert('Invalid Format', 'Invalid backup file format.', 'error');
                                                 }
                                             } catch (err) {
-                                                alert('Failed to parse backup file.');
+                                                showAlert('Import Failed', 'Failed to parse backup file.', 'error');
                                             }
                                         };
                                         reader.readAsText(file);
@@ -355,16 +499,55 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
                 {/* About */}
                 <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
-                    <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white mb-4">About</h2>
+                    <button
+                        onClick={() => setAboutExpanded(!aboutExpanded)}
+                        className="w-full flex items-center justify-between"
+                    >
+                        <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white">About</h2>
+                        <ChevronDownIcon className={`w-5 h-5 text-slate-400 dark:text-gray-500 transition-transform duration-200 ${aboutExpanded ? 'rotate-180' : ''}`} />
+                    </button>
                     
-                    <div className="space-y-3">
+                    {aboutExpanded && (
+                    <div className="space-y-3 mt-4">
                         <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-gray-800/60">
                             <span className="text-sm text-slate-500 dark:text-gray-400">App Name</span>
                             <span className="text-sm font-semibold text-slate-900 dark:text-white">LoanDash</span>
                         </div>
                         <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-gray-800/60">
                             <span className="text-sm text-slate-500 dark:text-gray-400">Version</span>
-                            <span className="text-sm font-semibold text-slate-900 dark:text-white">{CURRENT_VERSION}</span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-slate-900 dark:text-white">{CURRENT_VERSION}</span>
+                                <button
+                                    onClick={() => {
+                                        setCheckingUpdate(true);
+                                        setUpdateDismissed(false);
+                                        localStorage.removeItem('loanDashUpdateInfo');
+                                        localStorage.removeItem('loanDashLastUpdateCheck');
+                                        checkForUpdate().then(info => {
+                                            setCheckingUpdate(false);
+                                            if (info?.available) {
+                                                setUpdateInfo(info);
+                                                setApkUrl(info.apkUrl || null);
+                                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                                            } else {
+                                                showAlert('Up to Date', 'You are using the latest version.', 'success');
+                                            }
+                                        }).catch(() => {
+                                            setCheckingUpdate(false);
+                                            showAlert('Update Check Failed', 'Failed to check for updates.', 'error');
+                                        });
+                                    }}
+                                    disabled={checkingUpdate}
+                                    className="p-1.5 rounded-lg text-slate-400 dark:text-gray-500 hover:bg-slate-100 dark:hover:bg-gray-800 hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors disabled:opacity-50"
+                                    title="Check for updates"
+                                >
+                                    {checkingUpdate ? (
+                                        <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                        <ArrowUpIcon className="w-4 h-4" />
+                                    )}
+                                </button>
+                            </div>
                         </div>
                         <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-gray-800/60">
                             <span className="text-sm text-slate-500 dark:text-gray-400">Developer</span>
@@ -395,10 +578,19 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                             </a>
                         </div>
                     </div>
+                    )}
                 </div>
             </div>
 
             <ProfileModal isOpen={profileOpen} onClose={() => setProfileOpen(false)} />
+
+            <AlertModal
+                isOpen={alertOpen}
+                onClose={() => setAlertOpen(false)}
+                title={alertTitle}
+                message={alertMessage}
+                variant={alertVariant}
+            />
         </div>
     );
 };

@@ -9,7 +9,7 @@ interface StatisticsViewProps {
 
 const DEBT_COLORS = ['#ef4444', '#f97316', '#f59e0b', '#eab308', '#fb923c', '#fdba74'];
 const LOAN_COLORS = ['#22c55e', '#14b8a6', '#06b6d4', '#2dd4bf', '#34d399', '#6ee7b7'];
-const SERVICE_COLORS = ['#6366f1', '#8b5cf6', '#a78bfa', '#c084fc', '#e879f9', '#d946ef'];
+const SERVICE_COLORS = ['#6366f1', '#8b5cf6', '#a78bfa', '#c084fc', '#e879f9', '#d946ef', '#ec4899', '#f43f5e', '#8b5cf6', '#7c3aed'];
 
 const formatCurrency = (val: number, currency: string) => {
     try {
@@ -38,6 +38,7 @@ interface BreakdownCardProps {
 
 const BreakdownCard: React.FC<BreakdownCardProps> = ({ title, data, colors, appCurrency }) => {
     const total = data.reduce((s, d) => s + d.value, 0);
+    const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
     return (
         <div>
@@ -55,30 +56,46 @@ const BreakdownCard: React.FC<BreakdownCardProps> = ({ title, data, colors, appC
                                 paddingAngle={2}
                                 dataKey="value"
                                 labelLine={false}
+                                onClick={(_, index) => setSelectedIndex(selectedIndex === index ? null : index)}
                             >
                                 {data.map((_, i) => (
-                                    <Cell key={i} fill={colors[i % colors.length]} />
+                                    <Cell
+                                        key={i}
+                                        fill={colors[i % colors.length]}
+                                        style={{ cursor: 'pointer' }}
+                                        opacity={selectedIndex !== null && selectedIndex !== i ? 0.4 : 1}
+                                    />
                                 ))}
                             </Pie>
-                            <Tooltip content={<CustomTooltip currency={appCurrency} />} />
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
-                <div className="flex-1 overflow-y-auto max-h-[170px] space-y-1.5 pr-1">
+                <div className="flex-1 overflow-y-auto max-h-[170px] space-y-1.5 pr-1 no-scrollbar">
                     {data.map((item, i) => {
                         const pct = total > 0 ? ((item.value / total) * 100).toFixed(0) : '0';
+                        const isSelected = selectedIndex === i;
                         return (
-                            <div key={item.name} className="flex items-center gap-2 min-w-0">
+                            <button
+                                key={item.name}
+                                onClick={() => setSelectedIndex(isSelected ? null : i)}
+                                className={`flex items-center gap-2 min-w-0 w-full text-left rounded-lg px-1.5 py-1 transition-colors ${
+                                    isSelected ? 'bg-slate-100 dark:bg-[#1D2029]' : ''
+                                }`}
+                            >
                                 <span
                                     className="w-2.5 h-2.5 rounded-full shrink-0"
                                     style={{ backgroundColor: colors[i % colors.length] }}
                                 />
                                 <span className="text-xs text-slate-700 dark:text-gray-300 truncate flex-1">{item.name}</span>
-                                <span className="text-xs font-bold text-slate-900 dark:text-white shrink-0">
-                                    {formatCurrency(item.value, appCurrency)}
+                                <span className="hidden md:inline text-[10px] font-bold text-slate-900 dark:text-white shrink-0 whitespace-nowrap">
+                                    {formatCurrency(item.value, appCurrency)} ({pct}%)
                                 </span>
-                                <span className="text-[10px] text-slate-400 dark:text-gray-500 shrink-0">({pct}%)</span>
-                            </div>
+                                {isSelected && (
+                                    <span className="md:hidden text-[10px] font-bold text-slate-900 dark:text-white shrink-0 whitespace-nowrap">
+                                        {formatCurrency(item.value, appCurrency)} ({pct}%)
+                                    </span>
+                                )}
+                            </button>
                         );
                     })}
                 </div>
@@ -94,14 +111,21 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
         service: true,
     });
 
+    const [showAllTime, setShowAllTime] = useState(false);
+    const currentYear = new Date().getFullYear();
+
     const [activeSlide, setActiveSlide] = useState(0);
     const touchStartX = useRef(0);
     const touchDeltaX = useRef(0);
 
-    const { debtData, loanData, serviceData } = useMemo(() => {
+    const { debtData, loanData, serviceData, debtPaidTotal, loanCollectedTotal, servicePaidTotal } = useMemo(() => {
         const debts = financialItems.filter(i => i.category === 'Debt' && !i.isArchived);
         const loans = financialItems.filter(i => i.category === 'Loan' && !i.isArchived);
         const services = financialItems.filter(i => (i.category === 'Subscription' || i.category === 'Bill') && !i.isArchived);
+
+        const debtPaidTotal = debts.reduce((sum, d) => sum + (d.paymentHistory || []).reduce((s, p) => s + p.amount, 0), 0);
+        const loanCollectedTotal = loans.reduce((sum, l) => sum + (l.paymentHistory || []).reduce((s, p) => s + p.amount, 0), 0);
+        const servicePaidTotal = services.reduce((sum, s) => sum + (s.paymentHistory || []).reduce((sp, p) => sp + p.amount, 0), 0);
 
         const debtData = debts
             .map(d => {
@@ -134,9 +158,9 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
             })
             .filter(s => s.value > 0)
             .sort((a, b) => b.value - a.value)
-            .slice(0, 6);
+            .slice(0, 10);
 
-        return { debtData, loanData, serviceData };
+        return { debtData, loanData, serviceData, debtPaidTotal, loanCollectedTotal, servicePaidTotal };
     }, [financialItems]);
 
     const breakdowns = useMemo(() => {
@@ -191,6 +215,11 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
             .sort((a, b) => a.month.localeCompare(b.month));
     }, [financialItems]);
 
+    const filteredLineData = useMemo(() => {
+        if (showAllTime) return lineData;
+        return lineData.filter(d => d.month.startsWith(String(currentYear)));
+    }, [lineData, showAllTime, currentYear]);
+
     const hasAnyData = breakdowns.length > 0 || lineData.length > 0;
 
     if (!hasAnyData) return null;
@@ -202,8 +231,9 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
                 <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
                     <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white mb-4">Breakdowns</h2>
 
+                    {/* Mobile: carousel with swipe */}
                     <div
-                        className="overflow-hidden"
+                        className="md:hidden overflow-hidden"
                         onTouchStart={handleTouchStart}
                         onTouchMove={handleTouchMove}
                         onTouchEnd={handleTouchEnd}
@@ -225,8 +255,22 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
                         </div>
                     </div>
 
+                    {/* Desktop: all breakdowns in grid */}
+                    <div className="hidden md:grid md:grid-cols-3 gap-4">
+                        {breakdowns.map((b, i) => (
+                            <BreakdownCard
+                                key={i}
+                                title={b.title}
+                                data={b.data}
+                                colors={b.colors}
+                                appCurrency={appCurrency}
+                            />
+                        ))}
+                    </div>
+
+                    {/* Dots only on mobile */}
                     {breakdowns.length > 1 && (
-                        <div className="flex items-center justify-center gap-2 mt-4">
+                        <div className="flex items-center justify-center gap-2 mt-4 md:hidden">
                             {breakdowns.map((b, i) => (
                                 <button
                                     key={i}
@@ -246,9 +290,19 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
             {/* Financial Activity Over Time */}
             {lineData.length > 0 && (
                 <div className="bg-white dark:bg-[#0E1324] p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-200/60 dark:border-gray-800/60 shadow-xl">
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-3">
                         <h2 className="text-lg md:text-xl font-black text-slate-900 dark:text-white">Activity Over Time</h2>
-                        <div className="flex gap-1">
+                        <div className="flex items-center gap-1.5">
+                            <button
+                                onClick={() => setShowAllTime(!showAllTime)}
+                                className={`px-2 py-1 rounded-md text-[10px] font-bold transition-colors ${
+                                    showAllTime
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'bg-slate-100 dark:bg-[#1D2029] text-slate-500 dark:text-gray-400'
+                                }`}
+                            >
+                                {showAllTime ? 'All Time' : `${currentYear}`}
+                            </button>
                             {[
                                 { key: 'debt', label: 'Debts', color: '#ef4444' },
                                 { key: 'loan', label: 'Loans', color: '#22c55e' },
@@ -269,15 +323,32 @@ const StatisticsView: React.FC<StatisticsViewProps> = ({ financialItems, appCurr
                             ))}
                         </div>
                     </div>
+
+                    {/* Summary Totals */}
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                        <div className="text-center p-2 rounded-lg bg-slate-50 dark:bg-[#1D2029]">
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Bills & Subs Paid</p>
+                            <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400">{formatCurrency(servicePaidTotal, appCurrency)}</p>
+                        </div>
+                        <div className="text-center p-2 rounded-lg bg-slate-50 dark:bg-[#1D2029]">
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Collected from Loans</p>
+                            <p className="text-xs font-bold text-green-600 dark:text-green-400">{formatCurrency(loanCollectedTotal, appCurrency)}</p>
+                        </div>
+                        <div className="text-center p-2 rounded-lg bg-slate-50 dark:bg-[#1D2029]">
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Debt Payments</p>
+                            <p className="text-xs font-bold text-red-600 dark:text-red-400">{formatCurrency(debtPaidTotal, appCurrency)}</p>
+                        </div>
+                    </div>
+
                     <ResponsiveContainer width="100%" height={250}>
-                        <LineChart data={lineData}>
+                        <LineChart data={filteredLineData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-gray-700" />
                             <XAxis dataKey="month" tick={{ fontSize: 10 }} stroke="#94a3b8" />
                             <YAxis tickFormatter={(val) => formatCurrency(val, appCurrency)} tick={{ fontSize: 10 }} stroke="#94a3b8" width={60} />
                             <Tooltip formatter={(value: number) => formatCurrency(value, appCurrency)} />
-                            {activeLines.debt && <Line type="monotone" dataKey="DebtPayments" name="Debt Payments" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
-                            {activeLines.loan && <Line type="monotone" dataKey="LoanRepayments" name="Loan Repayments" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
-                            {activeLines.service && <Line type="monotone" dataKey="ServicePayments" name="Service Payments" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
+                            {activeLines.debt && <Line type="monotone" dataKey="DebtPayments" name="Debts" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
+                            {activeLines.loan && <Line type="monotone" dataKey="LoanRepayments" name="Loans" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
+                            {activeLines.service && <Line type="monotone" dataKey="ServicePayments" name="Services" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 6 }} />}
                         </LineChart>
                     </ResponsiveContainer>
                 </div>

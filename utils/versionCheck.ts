@@ -1,6 +1,6 @@
 export const GITHUB_REPO = 'hamzamix/LoandashMobile';
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-export const CURRENT_VERSION = '1.1.0';
+export const CURRENT_VERSION = '1.1.6';
 const CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 
 export interface UpdateInfo {

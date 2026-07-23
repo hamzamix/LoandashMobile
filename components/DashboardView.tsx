@@ -223,11 +223,14 @@ const DashboardView: React.FC<DashboardViewProps> = ({ financialItems, appCurren
     }, 0);
     const remainingLoans = totalLoans - totalPaidLoans;
 
-    // Overdue count
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Overdue count — use calculateNextDueDate for recurring items
     const overdueCount = active.filter(i => {
       if (i.status === 'Paid') return false;
-      return i.dueDate && i.dueDate < todayStr;
+      const nextDue = calculateNextDueDate(i);
+      if (!nextDue) return false;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return nextDue < today;
     }).length;
 
     return {

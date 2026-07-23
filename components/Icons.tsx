@@ -336,6 +336,12 @@ export const ArrowUpIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   </svg>
 );
 
+export const GripVerticalIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M8.25 15a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM15.75 15a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM8.25 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM15.75 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM12 6a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM12 18a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
+  </svg>
+);
+
 export const DownloadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />

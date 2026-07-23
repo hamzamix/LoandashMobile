@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { FinancialItem, FinancialItemRecurrence, Payment } from '../types.ts';
-import { FinanceIcon, EditIcon, ArchiveIcon, ChevronUpIcon, ChevronDownIcon, CalendarIcon, RepeatIcon, TrashIcon, UnarchiveIcon, PlusIcon, PhoneIcon } from './Icons.tsx';
+import { FinanceIcon, EditIcon, ArchiveIcon, ChevronUpIcon, ChevronDownIcon, CalendarIcon, RepeatIcon, TrashIcon, UnarchiveIcon, PlusIcon, PhoneIcon, GripVerticalIcon } from './Icons.tsx';
 import { getCachedIcon } from '../utils/iconCache.ts';
 import Modal from './Modal.tsx';
 import BulkPaymentModal from './BulkPaymentModal.tsx';
+import ConfirmModal from './ConfirmModal.tsx';
 
 // --- HELPER COMPONENTS & FUNCTIONS ---
 
@@ -207,6 +208,7 @@ const calculateMissingMonths = (item: FinancialItem): MissingMonth[] => {
     const payments = item.paymentHistory || [];
     const paymentAmount = item.recurringPaymentAmount || item.amount;
     const missing: MissingMonth[] = [];
+    const isSubscription = item.category === 'Subscription' || item.category === 'Bill';
     const intAmt = (item.interestEnabled && item.interestRate && item.interestRate > 0) ? item.amount * (item.interestRate / 100) : 0;
     const totalOwed = item.amount + intAmt;
 
@@ -235,7 +237,7 @@ const calculateMissingMonths = (item: FinancialItem): MissingMonth[] => {
         totalScheduled += paymentAmount;
 
         if (!hasPayment) {
-            if (totalOwed > 0 && totalScheduled > totalOwed) break;
+            if (!isSubscription && totalOwed > 0 && totalScheduled > totalOwed) break;
             const label = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
             missing.push({
                 date: new Date(currentDate),
@@ -452,14 +454,33 @@ interface FinancialItemCardProps {
     onArchive: (id: string) => void;
     onUnarchive: (id: string) => void;
     appCurrency: string;
+    isDragging?: boolean;
+    isDragOver?: boolean;
+    onDragStart?: (e: React.DragEvent, itemId: string) => void;
+    onDragOver?: (e: React.DragEvent, itemId: string) => void;
+    onDragEnd?: () => void;
+    onDrop?: (e: React.DragEvent, itemId: string) => void;
 }
 
-const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, isGridView, isExpanded, onToggleExpand, onEdit, onDelete, onAddPayment, onAddPayments, onUpdatePayment, onDeletePayment, onArchive, onUnarchive, appCurrency }) => {
+const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, isGridView, isExpanded, onToggleExpand, onEdit, onDelete, onAddPayment, onAddPayments, onUpdatePayment, onDeletePayment, onArchive, onUnarchive, appCurrency, isDragging, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop }) => {
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
     const [isBulkPaymentModalOpen, setIsBulkPaymentModalOpen] = useState(false);
     const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
     const [paymentModalDefaultDate, setPaymentModalDefaultDate] = useState<string | null>(null);
+    const [deleteItemConfirmOpen, setDeleteItemConfirmOpen] = useState(false);
+    const [deletePaymentConfirmOpen, setDeletePaymentConfirmOpen] = useState(false);
+    const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
+    const [detailModalOpen, setDetailModalOpen] = useState(false);
+
+    const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 768);
+    useEffect(() => {
+        const mq = window.matchMedia('(min-width: 768px)');
+        const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsDesktop(e.matches);
+        mq.addEventListener('change', handler);
+        setIsDesktop(mq.matches);
+        return () => mq.removeEventListener('change', handler);
+    }, []);
     
     const totalPaid = useMemo(() => (item.paymentHistory || []).reduce((sum, p) => sum + p.amount, 0), [item.paymentHistory]);
     const nextDueDate = useMemo(() => calculateNextDueDate(item), [item]);
@@ -583,15 +604,12 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
     };
 
     const handleDelete = () => {
-        if (window.confirm(`Are you sure you want to permanently delete "${item.title}"? This action cannot be undone.`)) {
-            onDelete(item.id);
-        }
+        setDeleteItemConfirmOpen(true);
     };
-    
+
     const handleDeletePaymentConfirm = (paymentId: string) => {
-        if (window.confirm("Are you sure you want to delete this payment record? This action cannot be undone.")) {
-            onDeletePayment(item.id, paymentId);
-        }
+        setDeletePaymentId(paymentId);
+        setDeletePaymentConfirmOpen(true);
     };
 
     const sortedPayments = useMemo(() => 
@@ -634,8 +652,13 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
     return (
         <>
             <div 
-                className={`${cardClasses} ${isGridView ? 'cursor-pointer' : ''}`}
-                onClick={isGridView ? onToggleExpand : undefined}
+                className={`${cardClasses} ${isGridView ? 'cursor-pointer' : ''} ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${isDragOver ? 'ring-2 ring-indigo-500 dark:ring-indigo-400' : ''}`}
+                onClick={isGridView ? (isDesktop ? () => setDetailModalOpen(true) : onToggleExpand) : undefined}
+                draggable={isGridView && !!onDragStart}
+                onDragStart={(e) => onDragStart?.(e, item.id)}
+                onDragOver={(e) => onDragOver?.(e, item.id)}
+                onDragEnd={onDragEnd}
+                onDrop={(e) => onDrop?.(e, item.id)}
             >
                 {/* Always Visible Header */}
                 <div className="flex justify-between items-start gap-2">
@@ -705,8 +728,8 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
                 )}
 
 
-                {/* Expanded Content */}
-                {isExpanded && (
+                {/* Expanded Content — inline for mobile */}
+                {isExpanded && !isDesktop && (
                     <div className="mt-3 md:mt-4 pt-3 md:pt-4 border-t border-slate-200/60 dark:border-gray-800/60 animate-fade-in-fast flex-grow flex flex-col" onClick={e => e.stopPropagation()}>
                         
                         {!item.isArchived && (
@@ -727,7 +750,7 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
                                         <p>{firstUnpaidPeriod.month} {firstUnpaidPeriod.year} has not been marked as paid.</p>
                                     </div>
                                 )}
-                                {missingMonths.length > 2 && !item.isArchived && (
+                                {missingMonths.length >= 1 && !item.isArchived && (
                                     <button
                                         onClick={() => setIsBulkPaymentModalOpen(true)}
                                         className="my-3 w-full p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700 rounded-xl text-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 transition flex items-center justify-center gap-2"
@@ -760,7 +783,7 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
                                         <DetailItem icon={CalendarIcon} label="Next Payment" value={`${formatDate(nextDueDate)} (${formatCurrency(paymentAmount, displayCurrency)})`} />
                                     )}
                                     <DetailItem icon={RepeatIcon} label="Recurring" value={item.recurrence === 'None' ? 'No' : `Yes (${item.recurrence?.toLowerCase()})`} />
-                                    <DetailItem icon={CalendarIcon} label="Started" value={formatDate(new Date(`${item.dueDate}T00:00:00`))} />
+                                    <DetailItem icon={CalendarIcon} label="Started" value={formatDate(item.startDate ? new Date(`${item.startDate}T00:00:00`) : null)} />
                                     <DetailItem icon={FinanceIcon} label="Amount" value={`${formatCurrency(paymentAmount, displayCurrency)} per payment`} />
                                     {item.interestEnabled && item.interestRate && item.interestRate > 0 && (
                                         <DetailItem icon={FinanceIcon} label={`Interest Rate`} value={`${item.interestRate}%`} />
@@ -836,9 +859,35 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
                 
                 {/* Footer (for expand/collapse) */}
                 {isGridView && !isExpanded && (
-                    <div className="mt-auto pt-4 flex justify-between items-center cursor-pointer" onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}>
-                        <DetailItem icon={CalendarIcon} label="Due" value={dueDateText} isBold={false} />
-                        <ChevronDownIcon className="w-5 h-5 text-slate-400 dark:text-gray-500" />
+                    <div className="mt-auto pt-4 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <DetailItem icon={CalendarIcon} label="Due" value={dueDateText} isBold={false} />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            {!item.isArchived && cardStatus !== 'paid' && item.paymentMethodType !== 'auto' && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleOpenPaymentModal(null, toYyyyMmDd(nextDueDate)); }}
+                                    className="px-2 py-1 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition-colors shadow-sm shadow-indigo-500/20 active:scale-95"
+                                >
+                                    Pay
+                                </button>
+                            )}
+                            {!item.isArchived && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                                    className="p-2 rounded-lg text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+                                    title="Edit"
+                                >
+                                    <EditIcon className="w-4 h-4" />
+                                </button>
+                            )}
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+                                className="p-2 rounded-lg text-slate-400 dark:text-gray-500 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+                            >
+                                <ChevronDownIcon className="w-4 h-4" />
+                            </button>
+                        </div>
                     </div>
                 )}
                 
@@ -878,6 +927,159 @@ const FinancialItemCard: React.FC<FinancialItemCardProps> = ({ item, activeTab, 
                 onRecordPayments={handleBulkPaymentSubmit}
                 currency={displayCurrency}
             />
+
+            <ConfirmModal
+                isOpen={deleteItemConfirmOpen}
+                onClose={() => setDeleteItemConfirmOpen(false)}
+                onConfirm={() => onDelete(item.id)}
+                title="Delete Item"
+                message={`Are you sure you want to permanently delete "${item.title}"? This action cannot be undone.`}
+                confirmText="Delete"
+                variant="danger"
+            />
+
+            <ConfirmModal
+                isOpen={deletePaymentConfirmOpen}
+                onClose={() => { setDeletePaymentConfirmOpen(false); setDeletePaymentId(null); }}
+                onConfirm={() => { if (deletePaymentId) onDeletePayment(item.id, deletePaymentId); }}
+                title="Delete Payment"
+                message="Are you sure you want to delete this payment record? This action cannot be undone."
+                confirmText="Delete"
+                variant="danger"
+            />
+
+            <Modal isOpen={detailModalOpen} onClose={() => setDetailModalOpen(false)} title={item.title}>
+                <div className="space-y-4 -mt-2">
+                    <div className="flex items-center gap-3">
+                        {renderIcon()}
+                        <div>
+                            <h3 className="font-bold text-base text-slate-800 dark:text-gray-100">{item.title}</h3>
+                            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400">
+                                <span className="font-medium px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800">{item.category}</span>
+                                <span>·</span>
+                                <span>{item.direction}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {!item.isArchived && (
+                        <>
+                            {cardStatus === 'dueToday' && (
+                                <div className="p-3 bg-red-100 dark:bg-red-900/50 border-l-4 border-red-500 text-red-800 dark:text-red-300 text-sm rounded-r-md">
+                                    <p className="font-semibold">Payment is due today!</p>
+                                </div>
+                            )}
+                            {cardStatus === 'dueSoon' && diffDays !== null && diffDays > 0 && (
+                                <div className="p-3 bg-orange-100 dark:bg-orange-900/50 border-l-4 border-orange-500 text-orange-800 dark:text-orange-300 text-sm rounded-r-md">
+                                    <p className="font-semibold">Payment is due in {diffDays} day{diffDays > 1 ? 's' : ''}.</p>
+                                </div>
+                            )}
+                            {firstUnpaidPeriod && (
+                                <div className="p-3 bg-amber-100 dark:bg-amber-900/50 border-l-4 border-amber-500 text-amber-800 dark:text-amber-300 text-sm rounded-r-md">
+                                    <p className="font-semibold">Attention Needed</p>
+                                    <p>{firstUnpaidPeriod.month} {firstUnpaidPeriod.year} has not been marked as paid.</p>
+                                </div>
+                            )}
+                            {missingMonths.length >= 1 && (
+                                <button
+                                    onClick={() => { setDetailModalOpen(false); setIsBulkPaymentModalOpen(true); }}
+                                    className="w-full p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700 rounded-xl text-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 transition flex items-center justify-center gap-2"
+                                >
+                                    <PlusIcon className="w-4 h-4" />
+                                    Record {missingMonths.length} Earlier Missing Payment{missingMonths.length !== 1 ? 's' : ''}
+                                </button>
+                            )}
+                        </>
+                    )}
+
+                    <div className="space-y-2">
+                        {isSimpleDebtOrLoan ? (
+                            <>
+                                <DetailItem icon={CalendarIcon} label="Return Date" value={dueDateText} isBold={true} />
+                                <DetailItem icon={CalendarIcon} label="Date Taken" value={formatDate(item.startDate ? new Date(`${item.startDate}T00:00:00`) : null)} />
+                                <DetailItem icon={FinanceIcon} label="Total Amount" value={formatCurrency(item.amount, displayCurrency)} />
+                                {item.interestEnabled && interestAmount > 0 && (
+                                    <>
+                                        <DetailItem icon={FinanceIcon} label={`Interest (${item.interestRate}%)`} value={formatCurrency(interestAmount, displayCurrency)} />
+                                        <DetailItem icon={FinanceIcon} label="Total with Interest" value={formatCurrency(totalWithInterest, displayCurrency)} isBold={true} />
+                                    </>
+                                )}
+                                {item.phone && <DetailItem icon={PhoneIcon} label="Phone" value={item.phone} />}
+                            </>
+                        ) : (
+                            <>
+                                <DetailItem icon={CalendarIcon} label="Due" value={dueDateText} isBold={true} />
+                                {cardStatus !== 'paid' && nextDueDate && (
+                                    <DetailItem icon={CalendarIcon} label="Next Payment" value={`${formatDate(nextDueDate)} (${formatCurrency(paymentAmount, displayCurrency)})`} />
+                                )}
+                                <DetailItem icon={RepeatIcon} label="Recurring" value={item.recurrence === 'None' ? 'No' : `Yes (${item.recurrence?.toLowerCase()})`} />
+                                <DetailItem icon={CalendarIcon} label="Started" value={formatDate(item.startDate ? new Date(`${item.startDate}T00:00:00`) : null)} />
+                                <DetailItem icon={FinanceIcon} label="Amount" value={`${formatCurrency(paymentAmount, displayCurrency)} per payment`} />
+                                {item.interestEnabled && item.interestRate && item.interestRate > 0 && (
+                                    <DetailItem icon={FinanceIcon} label={`Interest Rate`} value={`${item.interestRate}%`} />
+                                )}
+                                {item.phone && <DetailItem icon={PhoneIcon} label="Phone" value={item.phone} />}
+                            </>
+                        )}
+                        {!item.isArchived && (
+                            <button onClick={() => { setDetailModalOpen(false); onEdit(item); }} className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline font-medium">Edit Details</button>
+                        )}
+                    </div>
+
+                    {(item.description || sortedPayments.length > 0) && (
+                        <div className="pt-4 border-t border-slate-200 dark:border-gray-700 space-y-4">
+                            {item.description && (
+                                <div>
+                                    <h4 className="text-sm font-semibold mb-2 text-slate-700 dark:text-gray-200">Description / Notes</h4>
+                                    <p className="text-sm text-slate-600 dark:text-gray-400 whitespace-pre-wrap">{item.description}</p>
+                                </div>
+                            )}
+                            {sortedPayments.length > 0 && (
+                                <div>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <h4 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Payment History</h4>
+                                        <span className="text-sm font-semibold text-slate-600 dark:text-gray-300">
+                                            Total Paid: {formatCurrency(totalPaid, displayCurrency)}
+                                        </span>
+                                    </div>
+                                    <div className="space-y-1">
+                                        {sortedPayments.slice(0, 3).map(p => (
+                                            <div key={p.id} className="group text-sm p-2 rounded-md bg-slate-50 dark:bg-gray-700/50 flex justify-between items-center">
+                                                <div>
+                                                    <p className="font-medium text-slate-700 dark:text-gray-300">{formatDate(new Date(`${p.date}T00:00:00`))} ({p.method})</p>
+                                                    {p.notes && <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 italic">"{p.notes}"</p>}
+                                                </div>
+                                                <div className="flex items-center gap-1 shrink-0">
+                                                    <p className="font-semibold text-slate-800 dark:text-white mr-2">{formatCurrency(p.amount, displayCurrency)}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {sortedPayments.length > 3 && (
+                                        <button onClick={() => { setDetailModalOpen(false); setIsHistoryModalOpen(true); }} className="w-full text-center mt-2 p-1.5 text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 rounded-md">
+                                            Show All Payments...
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <div className="pt-4 border-t border-slate-200 dark:border-gray-700 flex justify-end items-center gap-3">
+                        {item.isArchived ? (
+                            <>
+                                <button onClick={() => { setDetailModalOpen(false); onUnarchive(item.id); }} className="px-4 py-2 text-sm font-semibold text-slate-700 dark:text-gray-300 bg-slate-100 dark:bg-gray-700 rounded-md hover:bg-slate-200 dark:hover:bg-gray-600 transition flex items-center gap-2"><UnarchiveIcon className="w-4 h-4" /> Unarchive</button>
+                                <button onClick={() => { setDetailModalOpen(false); onDelete(item.id); }} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-md hover:bg-red-500 transition flex items-center gap-2"><TrashIcon className="w-4 h-4" /> Delete</button>
+                            </>
+                        ) : (
+                            <>
+                                <button onClick={() => { setDetailModalOpen(false); onArchive(item.id); }} className="px-4 py-2 text-sm font-semibold text-slate-700 dark:text-gray-300 bg-slate-100 dark:bg-gray-700 rounded-md hover:bg-slate-200 dark:hover:bg-gray-600 transition">Archive</button>
+                                <button onClick={() => { setDetailModalOpen(false); handleOpenPaymentModal(null, toYyyyMmDd(nextDueDate)); }} className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-md hover:bg-indigo-500 transition" disabled={cardStatus === 'paid'}>Record Payment</button>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </Modal>
         </>
     );
 };

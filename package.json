@@ -2,10 +2,10 @@
   "name": "loandash",
   "version": "1.0.0",
   "description": "Mobile-first personal finance tracker for debts, loans, bills, and subscriptions.",
-  "main": "server.js",
+  "main": "server/index.js",
   "scripts": {
-    "start": "node server.js",
-    "server": "node server.js",
+    "start": "node server/index.js",
+    "server": "node server/index.js",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
@@ -21,22 +21,32 @@
     "@capacitor/core": "^7.4.3",
     "@capacitor/local-notifications": "^7.0.7",
     "@capacitor/status-bar": "^7.0.6",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.11.1",
+    "cors": "^2.8.6",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.6.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^6.9.14",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "recharts": "^3.9.2"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
-    "esbuild": "^0.23.0",
     "eslint": "^10.2.1",
-    "express": "^4.19.2",
-    "nodemailer": "^6.9.14",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
     "vite": "^5.4.19"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { FinancialItem, FinancialItemCategory, FinancialItemDirection, FinancialItemStatus, LifeEvent, RoadmapItem, Payment, FinancialItemRecurrence } from '../types.ts';
 import { FinanceIcon, PlusCircleIcon } from './Icons.tsx';
 import Modal from './Modal.tsx';
@@ -10,6 +10,18 @@ import FinancialItemCard from './FinancialItemCard.tsx';
 
 const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+};
+
+const ORDER_STORAGE_PREFIX = 'cardOrder_';
+
+const loadOrder = (tab: string): string[] => {
+    try {
+        return JSON.parse(localStorage.getItem(`${ORDER_STORAGE_PREFIX}${tab}`) || '[]');
+    } catch { return []; }
+};
+
+const saveOrder = (tab: string, ids: string[]) => {
+    localStorage.setItem(`${ORDER_STORAGE_PREFIX}${tab}`, JSON.stringify(ids));
 };
 
 // --- COMPONENT DEFINITION ---
@@ -33,6 +45,7 @@ interface FinanceTrackerViewProps {
   onTabChange?: (tab: FinanceTab) => void;
   searchQuery?: string;
   onSearchQueryChange?: (q: string) => void;
+  onOpenAdd?: () => void;
 }
 
 type FinanceTab = 'All' | 'Services' | 'Debts' | 'Loans' | 'Archive';
@@ -45,13 +58,16 @@ const SummaryStat: React.FC<{ label: string; value: string; valueColor?: string 
 );
 
 
-const FinanceTrackerView: React.FC<FinanceTrackerViewProps> = ({ items, roadmapItems, lifeEvents, onAddItem, onUpdateItem, onDeleteItem, onAddPayment, onAddPayments, onUpdatePayment, onDeletePayment, onArchiveItem, onUnarchiveItem, onEditItem, appCurrency, activeTab: propActiveTab, onTabChange, searchQuery = '', onSearchQueryChange }) => {
+const FinanceTrackerView: React.FC<FinanceTrackerViewProps> = ({ items, roadmapItems, lifeEvents, onAddItem, onUpdateItem, onDeleteItem, onAddPayment, onAddPayments, onUpdatePayment, onDeletePayment, onArchiveItem, onUnarchiveItem, onEditItem, appCurrency, activeTab: propActiveTab, onTabChange, searchQuery = '', onSearchQueryChange, onOpenAdd }) => {
   const [internalTab, setInternalTab] = useState<FinanceTab>('All');
   const activeTab = propActiveTab !== undefined ? propActiveTab : internalTab;
 
   const [statusFilter, setStatusFilter] = useState<FinancialItemStatus | 'All'>('All');
   const [directionFilter, setDirectionFilter] = useState<FinancialItemDirection | 'All'>('All');
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  const [orderVersion, setOrderVersion] = useState(0);
 
   const toggleRowExpansion = (itemId: string) => {
     setExpandedRows(prev => ({
@@ -97,12 +113,70 @@ const FinanceTrackerView: React.FC<FinanceTrackerViewProps> = ({ items, roadmapI
     setExpandedRows({});
   }, [filteredItems]);
 
+  // Drag-and-drop ordering
+  const isFilterActive = statusFilter !== 'All' || directionFilter !== 'All' || searchQuery.trim() !== '';
+  const customOrder = useMemo(() => loadOrder(activeTab), [activeTab, orderVersion]);
+
+  const orderedItems = useMemo(() => {
+    if (isFilterActive || customOrder.length === 0) return filteredItems;
+    const orderMap = new Map(customOrder.map((id, i) => [id, i]));
+    return [...filteredItems].sort((a, b) => {
+      const ai = orderMap.has(a.id) ? orderMap.get(a.id)! : 9999;
+      const bi = orderMap.has(b.id) ? orderMap.get(b.id)! : 9999;
+      return ai - bi;
+    });
+  }, [filteredItems, customOrder, isFilterActive]);
+
+  const handleDragStart = useCallback((e: React.DragEvent, itemId: string) => {
+    setDraggedItemId(itemId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', itemId);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, itemId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverItemId(itemId);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedItemId(null);
+    setDragOverItemId(null);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, dropItemId: string) => {
+    e.preventDefault();
+    if (!draggedItemId || draggedItemId === dropItemId) {
+      setDraggedItemId(null);
+      setDragOverItemId(null);
+      return;
+    }
+
+    const currentOrder = orderedItems.map(i => i.id);
+    const fromIdx = currentOrder.indexOf(draggedItemId);
+    const toIdx = currentOrder.indexOf(dropItemId);
+    if (fromIdx === -1 || toIdx === -1) {
+      setDraggedItemId(null);
+      setDragOverItemId(null);
+      return;
+    }
+
+    const newOrder = [...currentOrder];
+    newOrder.splice(fromIdx, 1);
+    newOrder.splice(toIdx, 0, draggedItemId);
+    saveOrder(activeTab, newOrder);
+    setOrderVersion(v => v + 1);
+
+    setDraggedItemId(null);
+    setDragOverItemId(null);
+  }, [draggedItemId, orderedItems, activeTab]);
+
   const itemsInRows = useMemo(() => {
     const chunk = (arr: FinancialItem[], size: number) => 
         arr.reduce((acc: FinancialItem[][], _, i) => 
             (i % size ? acc : [...acc, arr.slice(i, i + size)]), []);
-    return chunk(filteredItems, 3);
-  }, [filteredItems]);
+    return chunk(orderedItems, 3);
+  }, [orderedItems]);
 
   const tabs: FinanceTab[] = ['All', 'Services', 'Debts', 'Loans', 'Archive'];
   
@@ -114,16 +188,27 @@ const FinanceTrackerView: React.FC<FinanceTrackerViewProps> = ({ items, roadmapI
 
 
         {activeTab !== 'Archive' && (
-          <div className="mb-4 flex flex-wrap gap-2 items-center justify-center">
-            <FilterGroup label="Status" options={['All', 'Partial', 'Overdue']} selected={statusFilter} setSelected={setStatusFilter} />
-            {!['Services', 'Debts', 'Loans'].includes(activeTab) && (
-              <FilterGroup label="Direction" options={['All', ...Object.values(FinancialItemDirection)]} selected={directionFilter} setSelected={setDirectionFilter} />
+          <div className="mb-4 flex flex-wrap gap-2 items-center justify-between">
+            <div className="flex flex-wrap gap-2 items-center">
+              <FilterGroup label="Status" options={['All', 'Partial', 'Overdue']} selected={statusFilter} setSelected={setStatusFilter} />
+              {!['Services', 'Debts', 'Loans'].includes(activeTab) && (
+                <FilterGroup label="Direction" options={['All', ...Object.values(FinancialItemDirection)]} selected={directionFilter} setSelected={setDirectionFilter} />
+              )}
+            </div>
+            {onOpenAdd && (
+              <button
+                onClick={onOpenAdd}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-colors shadow-sm shadow-indigo-500/20 active:scale-95"
+              >
+                <PlusCircleIcon className="w-4 h-4" />
+                Add
+              </button>
             )}
           </div>
         )}
 
         <div className="mt-4">
-            {filteredItems.length > 0 ? (
+            {orderedItems.length > 0 ? (
                 <div className="space-y-3 md:space-y-6">
                     {itemsInRows.map((row, rowIndex) => (
                         <div key={rowIndex} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-6 items-start">
@@ -144,6 +229,12 @@ const FinanceTrackerView: React.FC<FinanceTrackerViewProps> = ({ items, roadmapI
                                     onArchive={onArchiveItem}
                                     onUnarchive={onUnarchiveItem}
                                     appCurrency={appCurrency}
+                                    isDragging={draggedItemId === item.id}
+                                    isDragOver={dragOverItemId === item.id && draggedItemId !== item.id}
+                                    onDragStart={handleDragStart}
+                                    onDragOver={handleDragOver}
+                                    onDragEnd={handleDragEnd}
+                                    onDrop={handleDrop}
                                 />
                             ))}
                         </div>

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import useLocalStorage from './hooks/useLocalStorage.ts';
 import { useNotifications } from './hooks/useNotifications.ts';
 import { FinancialItem, Payment, AppUser } from './types.ts';
+import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { cacheIcons } from './utils/iconCache.ts';
 import FinanceTrackerView from './components/FinanceTrackerView.tsx';
@@ -10,21 +11,25 @@ import DashboardView from './components/DashboardView.tsx';
 import Modal from './components/Modal.tsx';
 import FinancialItemForm from './components/FinancialItemForm.tsx';
 import AddServiceForm from './components/AddServiceForm.tsx';
+import {
+  apiGetItems,
+  isOnlineMode, getApiBase
+} from './src/api/client.ts';
 
-// Removed Firebase imports
 import { FinanceIcon, SettingsIcon, ThemeIcon, CalendarIcon, DashboardIcon, SunIcon, MoonIcon, CreditCardIcon, LandmarkIcon, CoinsIcon, TrendingUpIcon, PlusIcon, SearchIcon, XIcon } from './components/Icons.tsx';
 
 export type LoanDashTab = 'All' | 'Services' | 'Debts' | 'Loans' | 'Archive' | 'Settings';
 
 const canUseServerSync = () => {
   if (typeof window === 'undefined') return false;
-  return window.location.protocol.startsWith('http') && window.location.port === '3000';
+  if (!window.location.protocol.startsWith('http')) return false;
+  const port = window.location.port;
+  if (port === '5173' || port === '5183') return false;
+  return true;
 };
 
 const App: React.FC = () => {
-  // Hardcoded user to remove login system as requested
   const user = { uid: 'public_user', email: 'public@example.com', displayName: 'User' };
-  const authLoading = false;
   const [currentUserData, setCurrentUserData] = useState<AppUser | null>({
     uid: 'public_user',
     email: 'public@example.com',
@@ -33,6 +38,10 @@ const App: React.FC = () => {
     createdAt: new Date().toISOString()
   });
   const [financialItems, setFinancialItems] = useLocalStorage<FinancialItem[]>('loanDashFinancialItems', []);
+  const onlineMode = isOnlineMode();
+  const isNative = Capacitor.isNativePlatform();
+  const isCompanion = isNative && !!getApiBase();
+  const isWeb = !isNative;
 
   // Sanitize financialItems on load — prevents crash from old/corrupted localStorage data
   useEffect(() => {
@@ -161,7 +170,7 @@ const App: React.FC = () => {
   }, []);
 
   const hasLoadedFromServer = useRef(false);
-  const dbDataRef = useRef<any>({ projects: [], roadmapItems: [], timeEntries: [], lifeEvents: [], financialItems: [] });
+  const dbDataRef = useRef<any>({ financialItems: [], settings: null });
 
   // Load from the optional local server when running through server.js.
   useEffect(() => {
@@ -189,6 +198,20 @@ const App: React.FC = () => {
         setIsLoading(false);
       });
   }, []);
+
+  // Load data from API when in online mode
+  useEffect(() => {
+    if (!onlineMode) return;
+    setIsLoading(true);
+    apiGetItems()
+      .then(items => {
+        setFinancialItems(items);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setIsLoading(false);
+      });
+  }, [onlineMode]);
 
   // Save to the optional local server. Android and Vite dev use localStorage only.
   useEffect(() => {
@@ -227,7 +250,9 @@ const App: React.FC = () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    financialItems.forEach(async (item) => {
+    const updates: Map<string, { payments: Payment[]; status: string }> = new Map();
+
+    financialItems.forEach((item) => {
         if (item.paymentMethodType !== 'auto') return;
         if (!item.isRecurring || item.recurrence === 'None' || !item.dueDate) return;
         if (item.isArchived) return;
@@ -287,8 +312,8 @@ const App: React.FC = () => {
                          }
 
                      payments.push({
-                         id: `pay_auto_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-                         date: `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}-${String(pDate.getDate()).padStart(2, '0')}`,
+                         id: `pay_auto_${item.id}_${year}_${month}_${day}_${Math.random().toString(36).substring(7)}`,
+                         date: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
                          amount: finalAmount,
                          method: 'Auto-Payment',
                          notes: `Auto-recorded payment for ${item.title}`
@@ -300,37 +325,44 @@ const App: React.FC = () => {
         }
         
         if (shouldUpdate) {
-            setFinancialItems(prev => prev.map(i => {
-                if (i.id !== item.id) return i;
-                const intAmt = (i.interestEnabled && i.interestRate && i.interestRate > 0) ? i.amount * (i.interestRate / 100) : 0;
-                const totalOwed = i.amount + intAmt;
-                const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-                const newStatus = totalOwed > 0 && totalPaid >= totalOwed ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid';
-                return { ...i, paymentHistory: payments, status: newStatus as FinancialItem['status'] };
-            }));
+            const intAmt = (item.interestEnabled && item.interestRate && item.interestRate > 0) ? item.amount * (item.interestRate / 100) : 0;
+            const totalOwed = item.amount + intAmt;
+            const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+            const newStatus = totalOwed > 0 && totalPaid >= totalOwed ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid';
+            updates.set(item.id, { payments, status: newStatus });
         }
     });
 
+    if (updates.size > 0) {
+        setFinancialItems(prev => prev.map(i => {
+            const update = updates.get(i.id);
+            if (!update) return i;
+            return { ...i, paymentHistory: update.payments, status: update.status as FinancialItem['status'] };
+        }));
+    }
+
   }, [financialItems, isLoading, setFinancialItems]);
 
-  // Financial item operations using Local Storage
-  const handleAddFinancialItem = (i: any) => {
+  // Financial item operations — dual mode (API or localStorage)
+  const handleAddFinancialItem = async (i: any) => {
     const id = `fin_${Date.now()}`;
-    setFinancialItems(prev => [...prev, { ...i, id, userId: user.uid, paymentHistory: [], isArchived: false }]);
+    const newItem = { ...i, id, userId: user.uid, paymentHistory: [], isArchived: false };
+    setFinancialItems(prev => [...prev, newItem]);
   };
 
-  const handleUpdateFinancialItem = (u: any) => {
+  const handleUpdateFinancialItem = async (u: any) => {
     setFinancialItems(prev => prev.map(i => i.id === u.id ? { ...i, ...u } : i));
   };
 
-  const handleDeleteFinancialItem = (id: string) => {
+  const handleDeleteFinancialItem = async (id: string) => {
     setFinancialItems(prev => prev.filter(i => i.id !== id));
   };
 
-  const handleAddPayment = (itemId: string, p: any) => {
+  const handleAddPayment = async (itemId: string, p: any) => {
+    const paymentId = `pay_${Date.now()}`;
     setFinancialItems(prev => prev.map(item => {
         if (item.id === itemId) {
-            const updatedHistory = [...(item.paymentHistory || []), { ...p, id: `pay_${Date.now()}` }];
+            const updatedHistory = [...(item.paymentHistory || []), { ...p, id: paymentId }];
             const totalPaid = updatedHistory.reduce((sum, pay) => sum + pay.amount, 0);
             let newStatus = 'Paid';
             if (item.category === 'Debt' || item.category === 'Loan') {
@@ -350,7 +382,7 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleAddPayments = (itemId: string, payments: any[]) => {
+  const handleAddPayments = async (itemId: string, payments: any[]) => {
     setFinancialItems(prev => prev.map(item => {
         if (item.id === itemId) {
             let updatedHistory = [...(item.paymentHistory || [])];
@@ -376,7 +408,7 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleUpdatePayment = (itemId: string, paymentId: string, paymentData: any) => {
+  const handleUpdatePayment = async (itemId: string, paymentId: string, paymentData: any) => {
     setFinancialItems(prev => prev.map(item => {
         if (item.id === itemId) {
             const updatedHistory = (item.paymentHistory || []).map(p => 
@@ -401,7 +433,7 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleDeletePayment = (itemId: string, paymentId: string) => {
+  const handleDeletePayment = async (itemId: string, paymentId: string) => {
     setFinancialItems(prev => prev.map(item => {
         if (item.id === itemId) {
             const updatedHistory = (item.paymentHistory || []).filter(p => p.id !== paymentId);
@@ -426,15 +458,15 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleArchiveFinancialItem = (id: string) => {
+  const handleArchiveFinancialItem = async (id: string) => {
     setFinancialItems(prev => prev.map(i => i.id === id ? { ...i, isArchived: true } : i));
   };
 
-  const handleUnarchiveFinancialItem = (id: string) => {
+  const handleUnarchiveFinancialItem = async (id: string) => {
     setFinancialItems(prev => prev.map(i => i.id === id ? { ...i, isArchived: false } : i));
   };
   
-  const handleRestoreFromData = (data: any) => { 
+  const handleRestoreFromData = async (data: any) => { 
       if (data && data.financialItems) {
           setFinancialItems(data.financialItems);
       }
@@ -491,7 +523,7 @@ const App: React.FC = () => {
       return new Intl.NumberFormat('en-US', { style: 'currency', currency: appCurrency }).format(amount);
   };
 
-  if (authLoading) {
+  if (isLoading) {
       return (
           <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-[#0B0F1A] text-gray-400">
               <div className="animate-pulse flex flex-col items-center gap-4">
@@ -504,12 +536,217 @@ const App: React.FC = () => {
       );
   }
 
+  const tabs: Array<{ id: LoanDashTab; label: string; icon: JSX.Element }> = [
+    { id: 'All', label: 'Overview', icon: <DashboardIcon className="w-5 h-5" /> },
+    { id: 'Services', label: 'Bills & Subs', icon: <CreditCardIcon className="w-5 h-5" /> },
+    { id: 'Debts', label: 'Debts', icon: <LandmarkIcon className="w-5 h-5" /> },
+    { id: 'Loans', label: 'Loans', icon: <TrendingUpIcon className="w-5 h-5" /> },
+    { id: 'Archive', label: 'Archive', icon: <CalendarIcon className="w-5 h-5" /> },
+    { id: 'Settings', label: 'Settings', icon: <SettingsIcon className="w-5 h-5" /> },
+  ];
+
+  const themeBtn = (
+      <button 
+          onClick={() => {
+              const cycle: Array<'system' | 'light' | 'dark'> = ['system', 'light', 'dark'];
+              const idx = cycle.indexOf(themeMode);
+              setThemeMode(cycle[(idx + 1) % cycle.length]);
+          }}
+          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 text-slate-500 dark:text-gray-400 transition"
+          title={`Theme: ${themeMode}`}
+      >
+          {themeMode === 'system' ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+          ) : resolvedTheme === 'dark' ? (
+              <SunIcon className="w-5 h-5" />
+          ) : (
+              <MoonIcon className="w-5 h-5" />
+          )}
+      </button>
+  );
+
+  const searchBtn = activeTab !== 'All' && activeTab !== 'Settings' ? (
+      <button
+          onClick={() => {
+              if (isSearchOpen) { setSearchQuery(''); setIsSearchOpen(false); }
+              else { setIsSearchOpen(true); }
+          }}
+          className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 text-slate-500 dark:text-gray-400 transition"
+          title="Search"
+      >
+          {isSearchOpen ? <XIcon className="w-5 h-5" /> : <SearchIcon className="w-5 h-5" />}
+      </button>
+  ) : null;
+
+  const content = (
+      <>
+          {isLoading ? (
+              <div className="text-center p-12 text-slate-400 dark:text-gray-500 flex flex-col items-center gap-2">
+                  <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                  <p className="text-sm">Fetching your financial history...</p>
+              </div>
+          ) : activeTab === 'All' ? (
+              <DashboardView financialItems={financialItems} appCurrency={appCurrency} onSelectTab={setActiveTab} />
+          ) : activeTab === 'Settings' ? (
+              <SettingsView
+                  appCurrency={appCurrency}
+                  onUpdateAppCurrency={setAppCurrency}
+                  onRestoreFromData={handleRestoreFromData}
+                  notificationsEnabled={notificationsEnabled}
+                  onToggleNotifications={setNotificationsEnabled}
+                  theme={resolvedTheme}
+                  onSetTheme={setThemeMode}
+                  isNative={isNative}
+                  isCompanion={isCompanion}
+              />
+          ) : (
+              <FinanceTrackerView
+                  items={financialItems}
+                  roadmapItems={[]}
+                  lifeEvents={[]}
+                  onAddItem={handleAddFinancialItem}
+                  onUpdateItem={handleUpdateFinancialItem}
+                  onDeleteItem={handleDeleteFinancialItem}
+                  onAddPayment={handleAddPayment}
+                  onAddPayments={handleAddPayments}
+                  onUpdatePayment={handleUpdatePayment}
+                  onDeletePayment={handleDeletePayment}
+                  onArchiveItem={handleArchiveFinancialItem}
+                  onUnarchiveItem={handleUnarchiveFinancialItem}
+                  appCurrency={appCurrency}
+                  activeTab={activeTab as any}
+                  onTabChange={setActiveTab as any}
+                  searchQuery={searchQuery}
+                  onSearchQueryChange={setSearchQuery}
+                  onOpenAdd={handleGlobalAdd}
+                  onEditItem={(item) => {
+                      if (item.category === 'Subscription' || item.category === 'Bill') handleOpenServiceModal(item);
+                      else handleOpenDebtLoanModal(item);
+                  }}
+              />
+          )}
+      </>
+  );
+
+  // --- DESKTOP LAYOUT (Web App) ---
+  if (isWeb) {
+      return (
+          <div className="h-screen flex flex-col overflow-hidden bg-[#F8FAFC] dark:bg-[#0B0F1A] text-slate-800 dark:text-gray-200">
+              {/* Top Header */}
+              <header className="shrink-0 z-40 bg-white/85 dark:bg-[#0E1324]/85 backdrop-blur-md border-b border-slate-200 dark:border-gray-800/60 px-6 py-3 flex items-center gap-6">
+                  <img src="/logo.png" alt="LoanDash" className="h-8 w-auto object-contain" />
+
+                  {/* Tab Navigation */}
+                  <nav className="flex items-center gap-1">
+                      {tabs.map(tab => (
+                          <button
+                              key={tab.id}
+                              onClick={() => setActiveTab(tab.id)}
+                              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                  activeTab === tab.id
+                                      ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
+                                      : 'text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
+                              }`}
+                          >
+                              {tab.icon}
+                              <span className="hidden lg:inline">{tab.label}</span>
+                          </button>
+                      ))}
+                  </nav>
+
+                  {/* Right Tools */}
+                  <div className="flex items-center gap-2 ml-auto">
+                      {isSearchOpen && (
+                          <div className="relative">
+                              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-gray-500" />
+                              <input
+                                  type="text"
+                                  value={searchQuery}
+                                  onChange={(e) => setSearchQuery(e.target.value)}
+                                  placeholder="Search..."
+                                  className="bg-slate-100/50 dark:bg-[#1D2029]/50 border border-slate-200 dark:border-[#2F3441] rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500/50 outline-none w-64"
+                                  autoFocus
+                              />
+                          </div>
+                      )}
+                      {searchBtn}
+                      {themeBtn}
+                  </div>
+              </header>
+
+              {/* Main Content */}
+              <main className="flex-1 overflow-y-auto max-w-7xl w-full mx-auto px-6 py-6 no-scrollbar">
+                  {content}
+              </main>
+
+              {/* Desktop Modals */}
+              <Modal isOpen={isDebtLoanModalOpen} onClose={() => setIsDebtLoanModalOpen(false)} title={editingItem ? `Edit ${editingItem.category}` : `Add New ${formMode}` }>
+                  <FinancialItemForm
+                      onSubmit={(data) => {
+                          if (editingItem) handleUpdateFinancialItem({ ...editingItem, ...data });
+                          else handleAddFinancialItem(data);
+                          setIsDebtLoanModalOpen(false);
+                      }}
+                      onCancel={() => setIsDebtLoanModalOpen(false)}
+                      initialData={editingItem}
+                      mode={editingItem ? editingItem.category as 'Debt' | 'Loan' : formMode!}
+                      roadmapItems={[]}
+                      lifeEvents={[]}
+                      financialItems={financialItems}
+                      appCurrency={appCurrency}
+                  />
+              </Modal>
+              <Modal isOpen={isAddServiceModalOpen} onClose={() => setIsAddServiceModalOpen(false)} title={editingItem ? "Edit Service" : "Add New Service"}>
+                  <AddServiceForm
+                      onSubmit={(data: any) => {
+                          if (editingItem) {
+                              handleUpdateFinancialItem({
+                                  ...editingItem,
+                                  title: data.title, description: data.description,
+                                  amount: parseFloat(String(data.amount)), provider: data.provider,
+                                  currency: appCurrency, recurrence: data.recurrence,
+                                  serviceCategory: data.serviceCategory, dueDate: data.dueDate || editingItem.dueDate,
+                                  endDate: data.endDate, enableReminders: data.enableReminders,
+                                  reminderDays: parseInt(String(data.reminderDays), 10) || 0,
+                                  icon: data.icon, isRecurring: true,
+                                  paymentMethodType: data.paymentMethodType || 'manual',
+                                  category: 'Subscription',
+                              });
+                          } else {
+                              const svcDueDate = data.dueDate || new Date().toISOString().split('T')[0];
+                          handleAddFinancialItem({
+                                  title: data.title, description: data.description,
+                                  amount: parseFloat(String(data.amount)), provider: data.provider,
+                                  currency: appCurrency, recurrence: data.recurrence,
+                                  serviceCategory: data.serviceCategory,
+                                  dueDate: svcDueDate,
+                                  startDate: svcDueDate,
+                                  endDate: data.endDate, enableReminders: data.enableReminders,
+                                  reminderDays: parseInt(String(data.reminderDays), 10) || 0,
+                                  icon: data.icon, category: 'Subscription', direction: 'Outgoing',
+                                  status: 'Unpaid', isRecurring: true,
+                                  paymentMethodType: data.paymentMethodType || 'manual', isArchived: false,
+                              });
+                          }
+                          setIsAddServiceModalOpen(false);
+                      }}
+                      onCancel={() => setIsAddServiceModalOpen(false)}
+                      initialData={editingItem}
+                      roadmapItems={[]}
+                      lifeEvents={[]}
+                      financialItems={financialItems}
+                  />
+              </Modal>
+          </div>
+      );
+  }
+
+  // --- MOBILE LAYOUT (Native Apps) ---
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#F8FAFC] dark:bg-[#0B0F1A] text-slate-800 dark:text-gray-200">
         
         {/* Top Header Navigation */}
         <header className="shrink-0 z-40 pt-[env(safe-area-inset-top)] bg-white/85 dark:bg-[#0E1324]/85 backdrop-blur-md border-b border-slate-200 dark:border-gray-800/60 px-3 md:px-8 py-2.5 md:py-4 flex items-center justify-between gap-2">
-            {/* Left side: logo or search input */}
             <div className="flex items-center gap-2.5 md:gap-3 min-w-0 flex-1">
                 {isSearchOpen ? (
                     <div className="relative flex-1 max-w-md">
@@ -524,155 +761,38 @@ const App: React.FC = () => {
                         />
                     </div>
                 ) : (
-                    <img src="/logo.png" alt="LoanDash" className="h-9 md:h-10" />
+                    <img src="/logo.png" alt="LoanDash" className="h-9 md:h-10 w-auto object-contain" />
                 )}
             </div>
 
-            {/* Header Right Tools */}
             <div className="flex items-center gap-2 md:gap-4 shrink-0">
-                {activeTab !== 'All' && activeTab !== 'Settings' && (
-                    <button
-                        onClick={() => {
-                            if (isSearchOpen) {
-                                setSearchQuery('');
-                                setIsSearchOpen(false);
-                            } else {
-                                setIsSearchOpen(true);
-                            }
-                        }}
-                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 text-slate-500 dark:text-gray-400 transition"
-                        title="Search"
-                    >
-                        {isSearchOpen ? <XIcon className="w-5 h-5" /> : <SearchIcon className="w-5 h-5" />}
-                    </button>
+                {onlineMode && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-green-50 dark:bg-green-900/30 rounded-lg" title="Connected to server">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <span className="text-xs font-medium text-green-600 dark:text-green-400 hidden md:inline">Synced</span>
+                    </div>
                 )}
-                
-                {/* Theme toggle */}
-                <button 
-                    onClick={() => {
-                        const cycle: Array<'system' | 'light' | 'dark'> = ['system', 'light', 'dark'];
-                        const idx = cycle.indexOf(themeMode);
-                        setThemeMode(cycle[(idx + 1) % cycle.length]);
-                    }}
-                    className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 text-slate-500 dark:text-gray-400 transition"
-                    title={`Theme: ${themeMode}`}
-                >
-                    {themeMode === 'system' ? (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
-                    ) : resolvedTheme === 'dark' ? (
-                        <SunIcon className="w-5 h-5" />
-                    ) : (
-                        <MoonIcon className="w-5 h-5" />
-                    )}
-                </button>
+                {searchBtn}
+                {themeBtn}
             </div>
         </header>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto max-w-7xl w-full mx-auto p-3 md:p-8 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
-            {isLoading ? (
-                <div className="text-center p-12 text-slate-400 dark:text-gray-500 flex flex-col items-center gap-2">
-                    <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-sm">Fetching your financial history...</p>
-                </div>
-            ) : activeTab === 'All' ? (
-                <DashboardView 
-                    financialItems={financialItems}
-                    appCurrency={appCurrency}
-                    onSelectTab={setActiveTab}
-                />
-            ) : activeTab === 'Settings' ? (
-                <SettingsView 
-                    appCurrency={appCurrency} 
-                    onUpdateAppCurrency={setAppCurrency} 
-                    onRestoreFromData={handleRestoreFromData}
-                    notificationsEnabled={notificationsEnabled}
-                    onToggleNotifications={setNotificationsEnabled}
-                    theme={resolvedTheme}
-                    onSetTheme={setThemeMode}
-                />
-            ) : (
-                <FinanceTrackerView 
-                    items={financialItems} 
-                    roadmapItems={[]} 
-                    lifeEvents={[]} 
-                    onAddItem={handleAddFinancialItem} 
-                    onUpdateItem={handleUpdateFinancialItem} 
-                    onDeleteItem={handleDeleteFinancialItem} 
-                    onAddPayment={handleAddPayment} 
-                    onAddPayments={handleAddPayments} 
-                    onUpdatePayment={handleUpdatePayment} 
-                    onDeletePayment={handleDeletePayment} 
-                    onArchiveItem={handleArchiveFinancialItem} 
-                    onUnarchiveItem={handleUnarchiveFinancialItem} 
-                    appCurrency={appCurrency}
-                    activeTab={activeTab as any}
-                    onTabChange={setActiveTab as any}
-                    searchQuery={searchQuery}
-                    onSearchQueryChange={setSearchQuery}
-                    onEditItem={(item) => {
-                        if (item.category === 'Subscription' || item.category === 'Bill') handleOpenServiceModal(item);
-                        else handleOpenDebtLoanModal(item);
-                    }}
-                />
-            )}
+        <main className="flex-1 overflow-y-auto max-w-7xl w-full mx-auto p-3 md:p-8 pb-[calc(5.25rem+env(safe-area-inset-bottom))] no-scrollbar">
+            {content}
         </main>
 
-        {/* Global Floating Add Button - Centered bottom */}
-        {activeTab !== 'All' && activeTab !== 'Settings' && activeTab !== 'Archive' && (
-            <button 
-                onClick={handleGlobalAdd}
-                className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 w-14 h-14 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full flex items-center justify-center shadow-2xl shadow-indigo-500/50 active:scale-90 transition-all duration-300 animate-in fade-in zoom-in slide-in-from-bottom-4"
-            >
-                <PlusIcon className="w-7 h-7" />
-            </button>
-        )}
-
-        {/* Responsive Mobile Bottom Tab Bar & Desktop Sidebar Navigation - Optimized for Mobile */}
-        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0E1324] border-t border-slate-200 dark:border-gray-800 px-1.5 pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom))] flex justify-around md:justify-center items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)] md:gap-12 overflow-x-auto no-scrollbar scroll-smooth">
-            
-            <TabButton 
-                active={activeTab === 'All'} 
-                onClick={() => setActiveTab('All')} 
-                label="Overview" 
-                icon={<DashboardIcon className="w-5 h-5" />} 
-            />
-            
-            <TabButton 
-                active={activeTab === 'Services'} 
-                onClick={() => setActiveTab('Services')} 
-                label="Bills & Subs" 
-                icon={<CreditCardIcon className="w-5 h-5" />} 
-            />
-
-            <TabButton 
-                active={activeTab === 'Debts'} 
-                onClick={() => setActiveTab('Debts')} 
-                label="Debts" 
-                icon={<LandmarkIcon className="w-5 h-5" />} 
-            />
-
-            <TabButton 
-                active={activeTab === 'Loans'} 
-                onClick={() => setActiveTab('Loans')} 
-                label="Loans" 
-                icon={<TrendingUpIcon className="w-5 h-5" />} 
-            />
-
-            <TabButton 
-                active={activeTab === 'Archive'} 
-                onClick={() => setActiveTab('Archive')} 
-                label="Archive" 
-                icon={<CalendarIcon className="w-5 h-5" />} 
-            />
-
-            <TabButton 
-                active={activeTab === 'Settings'} 
-                onClick={() => setActiveTab('Settings')} 
-                label="Settings" 
-                icon={<SettingsIcon className="w-5 h-5" />} 
-            />
-
+        {/* Bottom Tab Bar */}
+        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0E1324] border-t border-slate-200 dark:border-gray-800 px-1.5 pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom))] flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)] overflow-x-auto no-scrollbar scroll-smooth">
+            {tabs.map(tab => (
+                <TabButton
+                    key={tab.id}
+                    active={activeTab === tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    label={tab.label}
+                    icon={tab.icon}
+                />
+            ))}
         </nav>
 
         {/* Global Modals */}
@@ -707,15 +827,17 @@ const App: React.FC = () => {
                             recurrence: data.recurrence,
                             serviceCategory: data.serviceCategory,
                             dueDate: data.dueDate || editingItem.dueDate,
+                            startDate: editingItem.startDate || data.dueDate || editingItem.dueDate,
                             endDate: data.endDate,
                             enableReminders: data.enableReminders,
                             reminderDays: parseInt(String(data.reminderDays), 10) || 0,
                             icon: data.icon,
-                            isRecurring: data.recurrence !== 'None',
-                            category: data.recurrence !== 'None' ? 'Subscription' : 'Bill',
+                            isRecurring: true,
+                            paymentMethodType: data.paymentMethodType || 'manual',
+                            category: 'Subscription',
                         });
                     } else {
-                        const newService = {
+                        handleAddFinancialItem({
                             title: data.title,
                             description: data.description,
                             amount: parseFloat(String(data.amount)),
@@ -724,17 +846,18 @@ const App: React.FC = () => {
                             recurrence: data.recurrence,
                             serviceCategory: data.serviceCategory,
                             dueDate: data.dueDate || new Date().toISOString().split('T')[0],
+                            startDate: data.dueDate || new Date().toISOString().split('T')[0],
                             endDate: data.endDate,
                             enableReminders: data.enableReminders,
                             reminderDays: parseInt(String(data.reminderDays), 10) || 0,
                             icon: data.icon,
-                            category: data.recurrence !== 'None' ? 'Subscription' : 'Bill',
+                            category: 'Subscription',
                             direction: 'Outgoing',
                             status: 'Unpaid',
-                            isRecurring: data.recurrence !== 'None',
+                            isRecurring: true,
+                            paymentMethodType: data.paymentMethodType || 'manual',
                             isArchived: false,
-                        };
-                        handleAddFinancialItem(newService);
+                        });
                     }
                     setIsAddServiceModalOpen(false);
                 }}

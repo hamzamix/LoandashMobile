@@ -1,0 +1,15 @@
+services:
+  loandash:
+    build: .
+    container_name: loandash
+    network_mode: bridge
+    ports:
+      - "8050:3000"
+    volumes:
+      - loandash-data:/data
+    environment:
+      - DOCKER_ENV=true
+    restart: unless-stopped
+
+volumes:
+  loandash-data:
