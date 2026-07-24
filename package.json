@@ -1,6 +1,6 @@
 {
   "name": "loandash",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Mobile-first personal finance tracker for debts, loans, bills, and subscriptions.",
   "main": "server/index.js",
   "scripts": {
